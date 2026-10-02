@@ -4,10 +4,10 @@
 
 Name:           gobject-introspection
 Version:        1.56.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Introspection system for GObject-based libraries
 
-License:        GPLv2+, LGPLv2+, MIT
+License:        GPLv2+ and LGPLv2+ and MIT
 URL:            https://wiki.gnome.org/Projects/GObjectIntrospection
 Source0:        https://download.gnome.org/sources/gobject-introspection/1.56/%{name}-%{version}.tar.xz
 
@@ -44,6 +44,14 @@ Requires:       %{name}%{?_isa} = %{version}-%{release}
 Requires:       libtool
 # For g-ir-doctool
 Requires:       python3-mako
+# https://bugzilla.redhat.com/show_bug.cgi?id=1915339
+%ifarch x86_64
+Conflicts:      gobject-introspection-devel.i686 <= %{version}-%{release}
+%else
+%ifarch i686
+Conflicts:      gobject-introspection-devel.x86_64 <= %{version}-%{release}
+%endif
+%endif
 
 %description devel
 Libraries and headers for gobject-introspection
@@ -87,6 +95,10 @@ find $RPM_BUILD_ROOT -type f -name "*.a" -print -delete
 %{_datadir}/gtk-doc/html/gi/
 
 %changelog
+* Mon Sep 07 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 1.56.1-2
+- Add Conflicts between gobject-introspection-devel.i686 and
+  gobject-introspection-devel.x86_64 to fix multilib conflicts
+
 * Mon Apr 09 2018 Kalev Lember <klember@redhat.com> - 1.56.1-1
 - Update to 1.56.1
 
