@@ -1,0 +1,212 @@
+From 7220c5c7d6294ac230e7e6060ebfb67570ec6070 Mon Sep 17 00:00:00 2001
+From: Jonathan Blandford <jrb@gnome.org>
+Date: Tue, 9 Jul 2024 17:04:24 -0700
+Subject: [PATCH 1/6] Make sure to set a GError with an invalid introspect-dump
+ string
+
+Fixes #495
+---
+ girepository/gdump.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/girepository/gdump.c b/girepository/gdump.c
+index 363575cf..2a2ab8e2 100644
+--- a/girepository/gdump.c
++++ b/girepository/gdump.c
+@@ -627,7 +627,13 @@ g_irepository_dump (const char  *arg,
+ 
+   char **args = g_strsplit (arg, ",", 2);
+   if (args == NULL)
+-    return FALSE;
++    {
++      g_set_error (error,
++		   G_FILE_ERROR,
++		   G_FILE_ERROR_FAILED,
++		   "Usage: --introspect-dump=input,output");
++      return FALSE;
++    }
+ 
+   const char *input_filename = args[0];
+   const char *output_filename = args[1];
+-- 
+2.55.0
+
+
+From 4304b146a36572530e34ba590b13baffa357c584 Mon Sep 17 00:00:00 2001
+From: Philip Withnall <pwithnall@gnome.org>
+Date: Thu, 12 Sep 2024 22:25:19 +0100
+Subject: [PATCH 2/6] dumper: Ensure error is always set if returning failure
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+It turns out, the previous commit actually assumed the `gdump.c` code
+was better than it is. scan-build found a true positive: two return
+paths in `dump_irepository()` which return false but which don’t set a
+`GError`.
+
+Fix those.
+
+Signed-off-by: Philip Withnall <pwithnall@gnome.org>
+---
+ girepository/gdump.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/girepository/gdump.c b/girepository/gdump.c
+index 2a2ab8e2..1281a793 100644
+--- a/girepository/gdump.c
++++ b/girepository/gdump.c
+@@ -706,7 +706,8 @@ g_irepository_dump (const char  *arg,
+ 
+           if (type == G_TYPE_INVALID)
+             {
+-              g_printerr ("Invalid GType function: '%s'\n", function);
++              g_set_error (error, G_FILE_ERROR, G_FILE_ERROR_FAILED,
++                           "Invalid GType function: %s", function);
+               caught_error = TRUE;
+               g_free (line);
+               break;
+@@ -726,7 +727,8 @@ g_irepository_dump (const char  *arg,
+ 
+           if (quark == 0)
+             {
+-              g_printerr ("Invalid error quark function: '%s'\n", function);
++              g_set_error (error, G_FILE_ERROR, G_FILE_ERROR_FAILED,
++                           "Invalid error quark function: %s", function);
+               caught_error = TRUE;
+               g_free (line);
+               break;
+-- 
+2.55.0
+
+
+From 04794804aabe9dca5c772a98bf7aa76eee0150ac Mon Sep 17 00:00:00 2001
+From: Philip Chimento <philip.chimento@gmail.com>
+Date: Sun, 12 Jan 2025 20:59:12 -0500
+Subject: [PATCH 3/6] girparser: Silence spurious invalid pointer warning
+
+With a recent version of GCC we get a warning here because the compiler
+thinks we may be dereferencing an invalid pointer in `if (*str == '<')` a
+couple of lines down, which I guess it thinks is potentially a pointer of
+0x0a (null plus strlen("GLib.Error")).
+
+Add a nonnull assertion, which is guaranteed because g_str_has_prefix()
+returns FALSE if either of its arguments are null. This silences the
+warning.
+---
+ girepository/girparser.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/girepository/girparser.c b/girepository/girparser.c
+index 9a7554ca..3897067a 100644
+--- a/girepository/girparser.c
++++ b/girepository/girparser.c
+@@ -624,6 +624,7 @@ parse_type_internal (GIrModule *module,
+     }
+   else if (g_str_has_prefix (str, "GLib.Error"))
+     {
++      g_assert (str != NULL);  /* silence compiler error */
+       str += strlen ("GLib.");
+ 
+       type->tag = GI_TYPE_TAG_ERROR;
+-- 
+2.55.0
+
+
+From d2f1b25f4254c7c4332cbe3d57d5daf542f12f4b Mon Sep 17 00:00:00 2001
+From: David King <dking@redhat.com>
+Date: Fri, 24 Jul 2026 06:00:27 +0100
+Subject: [PATCH 4/6] girepository: Fix leak in g_typelib_new_from_mapped_file
+
+---
+ girepository/gitypelib.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/girepository/gitypelib.c b/girepository/gitypelib.c
+index 29349da3..3c513a81 100644
+--- a/girepository/gitypelib.c
++++ b/girepository/gitypelib.c
+@@ -2440,7 +2440,10 @@ g_typelib_new_from_mapped_file (GMappedFile  *mfile,
+   gsize len = g_mapped_file_get_length (mfile);
+ 
+   if (!validate_header_basic (data, len, error))
+-    return NULL;
++    {
++      g_mapped_file_unref (mfile);
++      return NULL;
++    }
+ 
+   meta = g_slice_new0 (GITypelib);
+   meta->mfile = mfile;
+-- 
+2.55.0
+
+
+From 5f34f9204770df7a4220755f98236a30a29519ef Mon Sep 17 00:00:00 2001
+From: David King <dking@redhat.com>
+Date: Fri, 24 Jul 2026 06:02:40 +0100
+Subject: [PATCH 5/6] girffi: Fix leak in g_function_invoker_new_for_address
+
+---
+ girepository/girffi.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/girepository/girffi.c b/girepository/girffi.c
+index 43d3f18f..ce875f03 100644
+--- a/girepository/girffi.c
++++ b/girepository/girffi.c
+@@ -327,9 +327,15 @@ g_function_invoker_new_for_address (gpointer           addr,
+ 
+   atypes = g_callable_info_get_ffi_arg_types (info, &n_args);
+ 
+-  return ffi_prep_cif (&(invoker->cif), FFI_DEFAULT_ABI, n_args,
+-                       g_callable_info_get_ffi_return_type (info),
+-                       atypes) == FFI_OK;
++  if (ffi_prep_cif (&(invoker->cif), FFI_DEFAULT_ABI, n_args,
++                     g_callable_info_get_ffi_return_type (info),
++                     atypes) != FFI_OK)
++    {
++      g_free (atypes);
++      return FALSE;
++    }
++
++  return TRUE;
+ }
+ 
+ /**
+-- 
+2.55.0
+
+
+From 3e86367affe68a37cab9b140c83bef3dc3e285ad Mon Sep 17 00:00:00 2001
+From: David King <dking@redhat.com>
+Date: Fri, 24 Jul 2026 06:03:08 +0100
+Subject: [PATCH 6/6] girffi: Fix leaks in g_callable_info_create_closure
+
+---
+ girepository/girffi.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/girepository/girffi.c b/girepository/girffi.c
+index ce875f03..cec65804 100644
+--- a/girepository/girffi.c
++++ b/girepository/girffi.c
+@@ -403,6 +403,7 @@ g_callable_info_create_closure (GICallableInfo       *callable_info,
+   if (status != FFI_OK)
+     {
+       g_warning ("ffi_prep_cif failed: %d\n", status);
++      g_free (atypes);
+       ffi_closure_free (closure);
+       return NULL;
+     }
+@@ -411,6 +412,7 @@ g_callable_info_create_closure (GICallableInfo       *callable_info,
+   if (status != FFI_OK)
+     {
+       g_warning ("ffi_prep_closure failed: %d\n", status);
++      g_free (atypes);
+       ffi_closure_free (closure);
+       return NULL;
+     }
+-- 
+2.55.0
+

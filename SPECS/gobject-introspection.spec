@@ -2,7 +2,7 @@
 
 Name:           gobject-introspection
 Version:        1.79.1
-Release:        6%{?dist}
+Release:        7%{?dist}
 Summary:        Introspection system for GObject-based libraries
 
 License:        GPL-2.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-2-Clause
@@ -16,6 +16,9 @@ Patch:          workaround.patch
 # Backported from upstream
 # https://gitlab.gnome.org/GNOME/gobject-introspection/-/merge_requests/441
 Patch:          441.patch
+
+# https://redhat.atlassian.net/browse/RHEL-45044
+Patch:          gobject-introspection-1.79.1-fix-sast-warnings.patch
 
 BuildRequires:  bison
 BuildRequires:  flex
@@ -98,6 +101,9 @@ mv giscanner/ast.py giscanner/gio_ast.py
 %{_mandir}/man1/g-ir-scanner.1*
 
 %changelog
+* Fri Jul 24 2026 David King <dking@redhat.com> - 1.79.1-7
+- Fix several SAST warnings (RHEL-45044)
+
 * Tue Oct 29 2024 Troy Dawson <tdawson@redhat.com> - 1.79.1-6
 - Bump release for October 2024 mass rebuild:
   Resolves: RHEL-64018
